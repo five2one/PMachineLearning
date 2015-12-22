@@ -1,0 +1,169 @@
+---
+output: html_document
+---
+
+###Course Project for Practical Machine Learning    
+Prediction Assignment  
+==============================================
+December 2015
+
+##Overview
+Devices such as Jawbone Up, Nike FuelBand, and Fitbit are used to collect a large amount of data about personal activity. 
+In this project, data are collected from accelerometers on the belt, forearm, arm, and dumbell of 6 healthy participants who were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps in five different class modes. This is the "classe" variable in the provided training dataset.     
+Class A - exactly according to the specification,  
+Class B - throwing the elbows to the front,   
+Class C - lifting the dumbbell only halfway,   
+Class D - lowering the dumbbell only halfway,  
+Class E - and throwing the hips to the front.  
+
+##Data Source  
+The data for this project come from: http://groupware.les.inf.puc-rio.br/har  
+
+The training data file is available at:   https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv  
+
+The test data file is available at:   https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv  
+
+##Project Goal  
+The goal of your project is to predict the manner in which the exercise was performed by building a model and use the prediction model to predict 20 different test cases.  
+
+##Preprocessing  
+
+###Download data from url in to a set local directory  
+```{r cache=TRUE}
+trainURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+testURL <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(trainURL, destfile <- "pml-training.csv")
+download.file(testURL, destfile <- "pml-testing.csv")
+```
+###Load data & explore its structure 
+```{r cache=TRUE}
+traindata <- read.csv("pml-training.csv", stringsAsFactors=F, na.strings=c("","NA","#DIV/0"))
+testdata <- read.csv("pml-testing.csv", stringsAsFactors=F, na.strings=c("","NA","#DIV/0"))
+dim(traindata); dim(testdata)        #training and test set dimension
+names(traindata) == names(testdata)  #see if both dataset has the same col names
+names(traindata[160]); names(testdata[160])  #get the names of column which differ
+table(traindata$classe)     #the fequency of "classe" variable in training data
+```
+###Cleaning data  
+Remove columns which is not important and which has more than 80% NAs.  
+```{r}
+traindata <- traindata[,-(1:5)]   #remove unnecessary columns (5 columns)
+testdata <- testdata[,-(1:5)]
+#remove columns which has more than 80% NAs ~ 100 columns removed
+traindata <- traindata[,colSums(is.na(traindata)) < nrow(traindata) * 0.8]
+testdata <- testdata[,colSums(is.na(testdata)) < nrow(testdata) * 0.8]
+cat("Training data:",dim(traindata)); cat("Test data:",dim(testdata))  #dimension of cleaned data
+```
+After the cleaning, the training and test dataset is reduced to 55 columns.  
+
+###Split training data into training and validation set (30%)
+```{r}
+suppressMessages(library(caret))
+set.seed(1900)
+inTrain <- createDataPartition(y=traindata$classe, p = 0.7, list=FALSE)
+training <- traindata[inTrain,]
+valTraining <- traindata[-inTrain,]
+```
+
+##Model building options  
+In this model building selection, testing out three model and decide for a best model for prediction purpose.  
+
+###Model-1: Recursive Partitioning and Regression Trees  
+```{r cache=TRUE}
+library(rpart)
+model1 <- train(classe~., data = training, method="rpart")
+predict1 <- predict(model1, valTraining)
+m1 <- confusionMatrix(predict1, valTraining$classe)    
+```
+
+###Model-2: Linear Discriminant Analysis
+```{r cache=TRUE}
+library(MASS)
+model2 <- train(classe~., data = training, method="lda")
+predict2 <- predict(model2, valTraining)
+m2 <- confusionMatrix(predict2, valTraining$classe)
+```
+
+###Model-3: Random Forest
+```{r cache=TRUE}
+suppressMessages(library(randomForest))
+p1 <- proc.time()
+ff <- trainControl(method="cv", number = 4)
+model3<-train(classe~.,data = training, method="rf", trControl = ff)
+rforitime <- proc.time() - p1
+predict3<-predict(model3,valTraining)
+m3 <- confusionMatrix(predict3,valTraining$classe)
+```
+
+##Model selection via Accuracy results and Confusion matrix comparison
+```{r}
+acc <- data.frame(rpart=m1$overall[1], lda=m2$overall[1], rf=m3$overall[1])
+print(acc, digits=4)            #accuracy comparison for the three models
+#confusion matrix comparison for the three models
+cat("rpart:"); m1$table; cat("lda:"); m2$table; cat("rf:"); m3$table    
+```
+Based on high accuracy (99.61%) and looking at confusion matrix result (high true positive value), decided to select Random Forest (model3) as the selected prediction model.  
+The expected out-of-sample error correspond to the number of (1-accuracy) in the cross-validation data. Hence, higher accuracy means smaller expected out-of-sample error.  
+```{r}
+1 - m3$overall[1]
+```
+
+##Prediction Results  
+Using Random Forest model to predict result for testdata.
+```{r message=FALSE, warning=FALSE}
+pred20 <- predict(model3,testdata)
+pred20
+```
+
+##Conclusion
+From the analysis above, Random Forest model was chosen as the ideal model for our prediction purposes due to high accuracy compared to other model. The cons of this model is that it is the slowest, thus taking the longest in processing time to come out with prediction.  
+As a point of interest, an attempt to make the model perform faster is discussed in the Appendix.   
+
+##Submission
+The function below will generate individual file of test results.  
+```{r}
+pml_write_files <- function(x){n = length(x)
+    for(i in 1:n){ filename = paste0("./results/problem_id_", i, ".txt")
+        write.table(x[i], file = filename, quote = FALSE, row.names = FALSE, col.names = FALSE)}
+    }
+#produce individual result files
+testdata$classe <- as.character(pred20)
+pml_write_files(testdata$classe)
+```
+
+
+
+##Appendix
+It is an interesting outcome that Random Forest had a high accuracy but the model codes take more than 30 minutes to complete the processing time, well above the rpart or lda model processing time. It is a case of high accuracy at the expense of execution time. Therefore, below is an attempt to trade off accuracy with shorter processing time.  
+The original Random Forest model processing time is `r rforitime[3]` seconds.  
+Lets look at the list of important variables used in the model.
+```{r}
+varImp(model3)                  #display important variable list
+plot(varImp(model3), top = 20)
+```
+
+It is evidence that out of 54 variables, we can try to opt for the top 8 in the list for a balanced between accuracy and processing time. 
+
+```{r cache=TRUE, message=FALSE, warning=FALSE}
+p1 <- proc.time()
+tune <- expand.grid(mtry = 28)
+model3alt <- train(classe ~ num_window + roll_belt + pitch_forearm + yaw_belt 
+                + magnet_dumbbell_z + magnet_dumbbell_y + pitch_belt + roll_forearm,
+                data = training, method = "rf", tuneGrid = tune, ntree = 250, nodesize = 50)
+rfalttime <- proc.time() - p1
+```
+```{r}
+predict3alt <- predict(model3alt, valTraining)
+m3alt <- confusionMatrix(predict3alt, valTraining$classe)
+m3alt         #result of alternative model
+rfalttime[3]     #timing to process this alternative model
+rforitime[3]     #timing to process initial rf model with high accuracy
+```
+As a result, the accuracy is a bit less at 98.39% (before at 99.61%), but the elapsed processing time is reduced substantially (before `r rforitime[3]` seconds and after at `r rfalttime[3]` seconds). Huge improvement in processing time.  
+Now compare the test results of before and after.  
+```{r}
+pred20       #previous prediction
+pred20alt <- predict(model3alt,testdata)
+pred20alt    #prediction by alternative and faster rf code
+```
+It is shown that we can trade off between execution speed and accuracy with the same predicted results(for this test case).  
